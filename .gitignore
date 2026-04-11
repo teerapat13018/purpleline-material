@@ -1,0 +1,44 @@
+# ============================================================
+#  .gitignore สำหรับ purpleline-material (Streamlit App)
+# ============================================================
+
+# --- Streamlit Secrets (ห้าม push ขึ้น GitHub เด็ดขาด!) ---
+.streamlit/secrets.toml
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# --- Virtual Environment ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Temp / Log ---
+*.log
+*.txt
+*.tmp
+tmp/
+temp/
+
+# --- Google Service Account JSON (ห้าม push เด็ดขาด!) ---
+*.json
