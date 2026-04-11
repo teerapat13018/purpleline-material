@@ -7,7 +7,27 @@ import os
 import io
 import shutil
 import tempfile
+import base64
 from datetime import datetime
+
+
+# ──────────────────────────────────────────
+# HELPER: Mobile-friendly download button
+# ──────────────────────────────────────────
+def download_button_mobile(data: bytes, filename: str, label: str, mime: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+    """แปลง bytes เป็น base64 แล้วสร้าง HTML anchor tag — ใช้งานได้บน Android ทุก browser"""
+    b64 = base64.b64encode(data).decode()
+    href = f'data:{mime};base64,{b64}'
+    st.markdown(
+        f'''<a href="{href}" download="{filename}"
+            style="display:block; width:100%; text-align:center;
+                   background-color:#0068c9; color:white; padding:12px 16px;
+                   border-radius:8px; text-decoration:none; font-size:16px;
+                   font-weight:600; margin:4px 0; box-sizing:border-box;">
+            {label}
+        </a>''',
+        unsafe_allow_html=True,
+    )
 
 # ──────────────────────────────────────────
 # CONFIG
@@ -476,16 +496,15 @@ with tab2:
 
         with col_dl:
             dl_ready = st.session_state.dl_bytes is not None
-            st.download_button(
-                label     = f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}" if dl_ready else "⬇️ ดาวน์โหลด (กดสร้างก่อน)",
-                data      = st.session_state.dl_bytes if dl_ready else b"",
-                file_name = st.session_state.dl_fname if dl_ready else "form.xlsx",
-                mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                disabled  = not dl_ready,
-                on_click  = _save_pending_history,
-                key       = "dl_form_btn",
-            )
+            if dl_ready:
+                _save_pending_history()
+                download_button_mobile(
+                    data     = st.session_state.dl_bytes,
+                    filename = st.session_state.dl_fname,
+                    label    = f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
+                )
+            else:
+                st.button("⬇️ ดาวน์โหลด (กดสร้างก่อน)", use_container_width=True, disabled=True)
 
         if st.session_state.dl_msg:
             st.success(st.session_state.dl_msg)
@@ -531,10 +550,8 @@ with tab3:
             st.caption(f"ประวัติทั้งหมด: {len(hist):,} รายการ  |  กด 🔄 เพื่อดูข้อมูลล่าสุด")
         with col_dl:
             fname_hist = f"history_{datetime.now().strftime('%Y%m%d')}.xlsx"
-            st.download_button(
-                label="⬇️ ดาวน์โหลดประวัติ (.xlsx)",
-                data=history_to_excel_bytes(),
-                file_name=fname_hist,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+            download_button_mobile(
+                data     = history_to_excel_bytes(),
+                filename = fname_hist,
+                label    = "⬇️ ดาวน์โหลดประวัติ (.xlsx)",
             )
