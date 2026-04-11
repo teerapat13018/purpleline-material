@@ -35,7 +35,7 @@ desktop.ini
 
 # --- Temp / Log ---
 *.log
-*.txt
+logs-*.txt
 *.tmp
 tmp/
 temp/
