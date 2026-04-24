@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -15,19 +16,50 @@ from datetime import datetime
 # HELPER: Mobile-friendly download button
 # ──────────────────────────────────────────
 def download_button_mobile(data: bytes, filename: str, label: str, mime: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
-    """แปลง bytes เป็น base64 แล้วสร้าง HTML anchor tag — ใช้งานได้บน Android ทุก browser"""
+    """ใช้ Blob URL ผ่าน iframe — ไม่ navigate หน้าหลัก ทำงานได้บน Android ทุก browser"""
     b64 = base64.b64encode(data).decode()
-    href = f'data:{mime};base64,{b64}'
-    st.markdown(
-        f'''<a href="{href}" download="{filename}"
-            style="display:block; width:100%; text-align:center;
-                   background-color:#0068c9; color:white; padding:12px 16px;
-                   border-radius:8px; text-decoration:none; font-size:16px;
-                   font-weight:600; margin:4px 0; box-sizing:border-box;">
-            {label}
-        </a>''',
-        unsafe_allow_html=True,
-    )
+    html_code = f"""
+    <style>
+    .dl-btn {{
+        display: block; width: 100%; text-align: center;
+        background-color: #0068c9; color: white;
+        padding: 12px 16px; border-radius: 8px; border: none;
+        font-size: 16px; font-weight: 600; margin: 4px 0;
+        box-sizing: border-box; cursor: pointer; font-family: sans-serif;
+    }}
+    .dl-btn:active {{ background-color: #0052a3; }}
+    </style>
+    <button class="dl-btn" onclick="triggerDownload()">
+        {label}
+    </button>
+    <script>
+    function triggerDownload() {{
+        try {{
+            var b64  = '{b64}';
+            var mime = '{mime}';
+            var fname = '{filename}';
+            var bin  = atob(b64);
+            var arr  = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            var blob = new Blob([arr], {{type: mime}});
+            var url  = URL.createObjectURL(blob);
+            var a    = document.createElement('a');
+            a.href     = url;
+            a.download = fname;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {{
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }}, 1000);
+        }} catch(e) {{
+            alert('ดาวน์โหลดไม่สำเร็จ: ' + e.message);
+        }}
+    }}
+    </script>
+    """
+    components.html(html_code, height=65)
 
 # ──────────────────────────────────────────
 # CONFIG
