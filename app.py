@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 from openpyxl import load_workbook
 import os
 import io
@@ -18,7 +20,10 @@ SIGNATURE_PATH     = os.path.join(BASE_DIR, "signature.png")
 SIGNATURE_PASSWORD = "TAM2026"
 
 SHEET_ID = "1d6uZQdtOCLiWo4EbJ0lg_UPqn7m8BFxyXZ4U5Zg2yXM"
-SCOPES   = ["https://www.googleapis.com/auth/spreadsheets"]
+SCOPES   = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
 LOCATION_OPTIONS = ["— ไม่ระบุ —", "General", "PP25", "VS02NB", "VS02SB", "VS03"]
 
@@ -40,6 +45,29 @@ def get_gsheet():
     )
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID)
+
+
+def upload_to_gdrive(data: bytes, filename: str) -> str:
+    """อัปโหลดไฟล์ขึ้น Google Drive แล้วคืน link ดาวน์โหลดตรง"""
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SCOPES,
+    )
+    service = build("drive", "v3", credentials=creds)
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    file_meta = {"name": filename}
+    media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime, resumable=False)
+    f = service.files().create(body=file_meta, media_body=media, fields="id").execute()
+    file_id = f["id"]
+
+    # เปิดให้ทุกคนที่มี link ดาวน์โหลดได้
+    service.permissions().create(
+        fileId=file_id,
+        body={"role": "reader", "type": "anyone"},
+    ).execute()
+
+    return f"https://drive.google.com/uc?export=download&id={file_id}"
 
 
 # ──────────────────────────────────────────
@@ -242,6 +270,7 @@ for key, default in [
     ("dl_bytes", None),
     ("dl_fname", None),
     ("dl_msg", None),
+    ("dl_drive_url", None),
     ("pending_history", None),
 ]:
     if key not in st.session_state:
@@ -271,25 +300,35 @@ with st.sidebar:
 # ── DOWNLOAD BAR (เหนือ tabs — แสดงตลอดหลังสร้าง Form) ──
 if st.session_state.dl_bytes is not None:
     _save_pending_history()
-    dl_col, close_col = st.columns([5, 1])
-    with dl_col:
-        st.download_button(
-            label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
-            data=st.session_state.dl_bytes,
-            file_name=st.session_state.dl_fname,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary",
-        )
-    with close_col:
-        if st.button("✖", use_container_width=True, help="ปิด"):
-            st.session_state.dl_bytes = None
-            st.session_state.dl_fname = None
-            st.session_state.dl_msg   = None
-            st.rerun()
-    if st.session_state.dl_msg:
-        st.caption(st.session_state.dl_msg)
-    st.divider()
+
+    # อัปโหลดไปยัง Google Drive ครั้งแรกเท่านั้น
+    if st.session_state.dl_drive_url is None:
+        with st.spinner("⏳ กำลังเตรียมไฟล์สำหรับดาวน์โหลด..."):
+            try:
+                url = upload_to_gdrive(st.session_state.dl_bytes, st.session_state.dl_fname)
+                st.session_state.dl_drive_url = url
+            except Exception as e:
+                st.error(f"อัปโหลดไม่สำเร็จ: {e}")
+
+    if st.session_state.dl_drive_url:
+        dl_col, close_col = st.columns([5, 1])
+        with dl_col:
+            st.link_button(
+                label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
+                url=st.session_state.dl_drive_url,
+                use_container_width=True,
+                type="primary",
+            )
+        with close_col:
+            if st.button("✖", use_container_width=True, help="ปิด"):
+                st.session_state.dl_bytes     = None
+                st.session_state.dl_fname     = None
+                st.session_state.dl_msg       = None
+                st.session_state.dl_drive_url = None
+                st.rerun()
+        if st.session_state.dl_msg:
+            st.caption(st.session_state.dl_msg)
+        st.divider()
 
 # ── 3 TABS ──
 n_selected = len(st.session_state.selected_keys)
@@ -485,6 +524,7 @@ with tab2:
                 st.session_state.dl_bytes        = excel_bytes
                 st.session_state.dl_fname        = f"{doc_number}.xlsx"
                 st.session_state.dl_msg          = f"✅ {doc_number} — {requester_name} ({len(qty_data)} รายการ)"
+                st.session_state.dl_drive_url    = None  # reset เพื่ออัปโหลดใหม่
                 st.session_state.pending_history = {
                     "qty_data":       qty_data,
                     "doc_number":     doc_number,
