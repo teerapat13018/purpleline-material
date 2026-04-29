@@ -44,20 +44,21 @@ def get_gsheet():
     return gc.open_by_key(SHEET_ID)
 
 
-def upload_to_fileio(data: bytes, filename: str) -> str:
-    """อัปโหลดไฟล์ไปยัง file.io — ได้ external link ที่ mobile browser ทุกตัวเปิดได้"""
+def upload_temp(data: bytes, filename: str) -> str:
+    """อัปโหลดไฟล์ขึ้น tmpfiles.org — external link ที่ mobile browser ทุกตัวโหลดได้ (หมดอายุ 1 ชม.)"""
     mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     resp = _req.post(
-        "https://file.io/",
+        "https://tmpfiles.org/api/v1/upload",
         files={"file": (filename, io.BytesIO(data), mime)},
-        data={"expires": "1d"},
         timeout=30,
     )
     resp.raise_for_status()
     j = resp.json()
-    if j.get("success"):
-        return j["link"]
-    raise RuntimeError(f"file.io error: {j}")
+    if j.get("status") == "success":
+        # แปลง tmpfiles.org/XXXX → tmpfiles.org/dl/XXXX สำหรับ direct download
+        url = j["data"]["url"]
+        return url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+    raise RuntimeError(f"tmpfiles error: {j}")
 
 
 # ──────────────────────────────────────────
@@ -295,7 +296,7 @@ if st.session_state.dl_bytes is not None:
     if st.session_state.dl_drive_url is None:
         with st.spinner("⏳ กำลังเตรียมไฟล์..."):
             try:
-                url = upload_to_fileio(st.session_state.dl_bytes, st.session_state.dl_fname)
+                url = upload_temp(st.session_state.dl_bytes, st.session_state.dl_fname)
                 st.session_state.dl_drive_url = url
                 st.rerun()
             except Exception as e:
