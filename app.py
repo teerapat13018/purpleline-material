@@ -45,20 +45,49 @@ def get_gsheet():
 
 
 def upload_temp(data: bytes, filename: str) -> str:
-    """อัปโหลดไฟล์ขึ้น tmpfiles.org — external link ที่ mobile browser ทุกตัวโหลดได้ (หมดอายุ 1 ชม.)"""
+    """ลองอัปโหลดทีละ service จนสำเร็จ"""
     mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    resp = _req.post(
-        "https://tmpfiles.org/api/v1/upload",
-        files={"file": (filename, io.BytesIO(data), mime)},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    j = resp.json()
-    if j.get("status") == "success":
-        # แปลง tmpfiles.org/XXXX → tmpfiles.org/dl/XXXX สำหรับ direct download
-        url = j["data"]["url"]
-        return url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-    raise RuntimeError(f"tmpfiles error: {j}")
+    errors = []
+
+    # 1) tmpfiles.org
+    try:
+        r = _req.post("https://tmpfiles.org/api/v1/upload",
+                      files={"file": (filename, io.BytesIO(data), mime)},
+                      timeout=20)
+        r.raise_for_status()
+        j = r.json()
+        if j.get("status") == "success":
+            return j["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
+        errors.append(f"tmpfiles={j}")
+    except Exception as e:
+        errors.append(f"tmpfiles={e}")
+
+    # 2) 0x0.st
+    try:
+        r = _req.post("https://0x0.st/",
+                      files={"file": (filename, io.BytesIO(data), mime)},
+                      timeout=20)
+        if r.ok and r.text.strip().startswith("http"):
+            return r.text.strip()
+        errors.append(f"0x0=status{r.status_code}:{r.text[:80]}")
+    except Exception as e:
+        errors.append(f"0x0={e}")
+
+    # 3) litterbox.catbox.moe
+    try:
+        r = _req.post(
+            "https://litterbox.catbox.moe/resources/internals/api.php",
+            data={"reqtype": "fileupload", "time": "1h"},
+            files={"fileToUpload": (filename, io.BytesIO(data), mime)},
+            timeout=30,
+        )
+        if r.ok and r.text.strip().startswith("http"):
+            return r.text.strip()
+        errors.append(f"litterbox=status{r.status_code}:{r.text[:80]}")
+    except Exception as e:
+        errors.append(f"litterbox={e}")
+
+    raise RuntimeError(" | ".join(errors))
 
 
 # ──────────────────────────────────────────
@@ -262,6 +291,7 @@ for key, default in [
     ("dl_fname", None),
     ("dl_msg", None),
     ("dl_drive_url", None),
+    ("dl_upload_err", None),
     ("pending_history", None),
 ]:
     if key not in st.session_state:
@@ -292,35 +322,49 @@ with st.sidebar:
 if st.session_state.dl_bytes is not None:
     _save_pending_history()
 
-    # อัปโหลด file.io ครั้งแรกเท่านั้น
+    # อัปโหลดครั้งแรกเท่านั้น (dl_drive_url == "" หมายความว่าลองแล้วล้มเหลวทุก service)
     if st.session_state.dl_drive_url is None:
         with st.spinner("⏳ กำลังเตรียมไฟล์..."):
             try:
                 url = upload_temp(st.session_state.dl_bytes, st.session_state.dl_fname)
                 st.session_state.dl_drive_url = url
-                st.rerun()
             except Exception as e:
-                st.error(f"เตรียมไฟล์ไม่สำเร็จ: {e}")
+                st.session_state.dl_drive_url = ""   # mark ว่าล้มเหลว
+                st.session_state.dl_upload_err = str(e)
+        st.rerun()
 
-    if st.session_state.dl_drive_url:
-        dl_col, close_col = st.columns([5, 1])
-        with dl_col:
+    dl_col, close_col = st.columns([5, 1])
+    with dl_col:
+        if st.session_state.dl_drive_url:
+            # อัปโหลดสำเร็จ — ใช้ external link
             st.link_button(
                 label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
                 url=st.session_state.dl_drive_url,
                 use_container_width=True,
                 type="primary",
             )
-        with close_col:
-            if st.button("✖", use_container_width=True, help="ปิด"):
-                st.session_state.dl_bytes     = None
-                st.session_state.dl_fname     = None
-                st.session_state.dl_msg       = None
-                st.session_state.dl_drive_url = None
-                st.rerun()
-        if st.session_state.dl_msg:
-            st.caption(st.session_state.dl_msg)
-        st.divider()
+        else:
+            # fallback — ใช้ st.download_button
+            st.warning(f"⚠️ upload ไม่สำเร็จ ({st.session_state.get('dl_upload_err','')[:120]}) — ลองกดปุ่มนี้แทน:")
+            st.download_button(
+                label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
+                data=st.session_state.dl_bytes,
+                file_name=st.session_state.dl_fname,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary",
+            )
+    with close_col:
+        if st.button("✖", use_container_width=True, help="ปิด"):
+            st.session_state.dl_bytes      = None
+            st.session_state.dl_fname      = None
+            st.session_state.dl_msg        = None
+            st.session_state.dl_drive_url  = None
+            st.session_state.dl_upload_err = None
+            st.rerun()
+    if st.session_state.dl_msg:
+        st.caption(st.session_state.dl_msg)
+    st.divider()
 
 # ── 3 TABS ──
 n_selected = len(st.session_state.selected_keys)
