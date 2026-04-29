@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 from openpyxl import load_workbook
 import os
 import io
@@ -14,16 +12,16 @@ from datetime import datetime
 # ──────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR  = os.path.join(BASE_DIR, "static", "exports")
+os.makedirs(STATIC_DIR, exist_ok=True)
+
 FORM_TEMPLATE_PATH = os.path.join(BASE_DIR, "Form เบิกของ TAM 19032026.xlsx")
 SIGNATURE_PATH     = os.path.join(BASE_DIR, "signature.png")
 SIGNATURE_PASSWORD = "TAM2026"
 
 SHEET_ID = "1d6uZQdtOCLiWo4EbJ0lg_UPqn7m8BFxyXZ4U5Zg2yXM"
-SCOPES   = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+SCOPES   = ["https://www.googleapis.com/auth/spreadsheets"]
 
 LOCATION_OPTIONS = ["— ไม่ระบุ —", "General", "PP25", "VS02NB", "VS02SB", "VS03"]
 
@@ -47,27 +45,12 @@ def get_gsheet():
     return gc.open_by_key(SHEET_ID)
 
 
-def upload_to_gdrive(data: bytes, filename: str) -> str:
-    """อัปโหลดไฟล์ขึ้น Google Drive แล้วคืน link ดาวน์โหลดตรง"""
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=SCOPES,
-    )
-    service = build("drive", "v3", credentials=creds)
-    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-    file_meta = {"name": filename}
-    media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime, resumable=False)
-    f = service.files().create(body=file_meta, media_body=media, fields="id").execute()
-    file_id = f["id"]
-
-    # เปิดให้ทุกคนที่มี link ดาวน์โหลดได้
-    service.permissions().create(
-        fileId=file_id,
-        body={"role": "reader", "type": "anyone"},
-    ).execute()
-
-    return f"https://drive.google.com/uc?export=download&id={file_id}"
+def save_for_download(data: bytes, filename: str) -> str:
+    """บันทึกไฟล์ลง static/exports/ แล้วคืน relative URL"""
+    filepath = os.path.join(STATIC_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(data)
+    return f"app/static/exports/{filename}"
 
 
 # ──────────────────────────────────────────
@@ -301,34 +284,35 @@ with st.sidebar:
 if st.session_state.dl_bytes is not None:
     _save_pending_history()
 
-    # อัปโหลดไปยัง Google Drive ครั้งแรกเท่านั้น
+    # บันทึก static file ครั้งแรกเท่านั้น
     if st.session_state.dl_drive_url is None:
-        with st.spinner("⏳ กำลังเตรียมไฟล์สำหรับดาวน์โหลด..."):
-            try:
-                url = upload_to_gdrive(st.session_state.dl_bytes, st.session_state.dl_fname)
-                st.session_state.dl_drive_url = url
-            except Exception as e:
-                st.error(f"อัปโหลดไม่สำเร็จ: {e}")
+        url = save_for_download(st.session_state.dl_bytes, st.session_state.dl_fname)
+        st.session_state.dl_drive_url = url
 
-    if st.session_state.dl_drive_url:
-        dl_col, close_col = st.columns([5, 1])
-        with dl_col:
-            st.link_button(
-                label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
-                url=st.session_state.dl_drive_url,
-                use_container_width=True,
-                type="primary",
-            )
-        with close_col:
-            if st.button("✖", use_container_width=True, help="ปิด"):
-                st.session_state.dl_bytes     = None
-                st.session_state.dl_fname     = None
-                st.session_state.dl_msg       = None
-                st.session_state.dl_drive_url = None
-                st.rerun()
-        if st.session_state.dl_msg:
-            st.caption(st.session_state.dl_msg)
-        st.divider()
+    dl_col, close_col = st.columns([5, 1])
+    fname = st.session_state.dl_fname
+    furl  = st.session_state.dl_drive_url
+    with dl_col:
+        st.markdown(
+            f'''<a href="{furl}" download="{fname}"
+                style="display:block;width:100%;text-align:center;
+                       background:#0068c9;color:white;padding:12px 16px;
+                       border-radius:8px;text-decoration:none;font-size:16px;
+                       font-weight:600;box-sizing:border-box;">
+                ⬇️ ดาวน์โหลด {fname}
+            </a>''',
+            unsafe_allow_html=True,
+        )
+    with close_col:
+        if st.button("✖", use_container_width=True, help="ปิด"):
+            st.session_state.dl_bytes     = None
+            st.session_state.dl_fname     = None
+            st.session_state.dl_msg       = None
+            st.session_state.dl_drive_url = None
+            st.rerun()
+    if st.session_state.dl_msg:
+        st.caption(st.session_state.dl_msg)
+    st.divider()
 
 # ── 3 TABS ──
 n_selected = len(st.session_state.selected_keys)
