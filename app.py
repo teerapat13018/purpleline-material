@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -8,58 +7,7 @@ import os
 import io
 import shutil
 import tempfile
-import base64
 from datetime import datetime
-
-
-# ──────────────────────────────────────────
-# HELPER: Mobile-friendly download button
-# ──────────────────────────────────────────
-def download_button_mobile(data: bytes, filename: str, label: str, mime: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
-    """ใช้ Blob URL ผ่าน iframe — ไม่ navigate หน้าหลัก ทำงานได้บน Android ทุก browser"""
-    b64 = base64.b64encode(data).decode()
-    html_code = f"""
-    <style>
-    .dl-btn {{
-        display: block; width: 100%; text-align: center;
-        background-color: #0068c9; color: white;
-        padding: 12px 16px; border-radius: 8px; border: none;
-        font-size: 16px; font-weight: 600; margin: 4px 0;
-        box-sizing: border-box; cursor: pointer; font-family: sans-serif;
-    }}
-    .dl-btn:active {{ background-color: #0052a3; }}
-    </style>
-    <button class="dl-btn" onclick="triggerDownload()">
-        {label}
-    </button>
-    <script>
-    function triggerDownload() {{
-        try {{
-            var b64  = '{b64}';
-            var mime = '{mime}';
-            var fname = '{filename}';
-            var bin  = atob(b64);
-            var arr  = new Uint8Array(bin.length);
-            for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-            var blob = new Blob([arr], {{type: mime}});
-            var url  = URL.createObjectURL(blob);
-            var a    = document.createElement('a');
-            a.href     = url;
-            a.download = fname;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(function() {{
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }}, 1000);
-        }} catch(e) {{
-            alert('ดาวน์โหลดไม่สำเร็จ: ' + e.message);
-        }}
-    }}
-    </script>
-    """
-    components.html(html_code, height=65)
 
 # ──────────────────────────────────────────
 # CONFIG
@@ -320,6 +268,29 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+# ── DOWNLOAD BAR (เหนือ tabs — แสดงตลอดหลังสร้าง Form) ──
+if st.session_state.dl_bytes is not None:
+    _save_pending_history()
+    dl_col, close_col = st.columns([5, 1])
+    with dl_col:
+        st.download_button(
+            label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
+            data=st.session_state.dl_bytes,
+            file_name=st.session_state.dl_fname,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+        )
+    with close_col:
+        if st.button("✖", use_container_width=True, help="ปิด"):
+            st.session_state.dl_bytes = None
+            st.session_state.dl_fname = None
+            st.session_state.dl_msg   = None
+            st.rerun()
+    if st.session_state.dl_msg:
+        st.caption(st.session_state.dl_msg)
+    st.divider()
+
 # ── 3 TABS ──
 n_selected = len(st.session_state.selected_keys)
 tab1, tab2, tab3 = st.tabs([
@@ -499,47 +470,33 @@ with tab2:
         if export_disabled:
             st.warning("⚠️ กรุณาเลือกผู้เบิกก่อน")
 
-        col_create, col_dl = st.columns(2)
-
-        with col_create:
-            if st.button(
-                "📥 สร้าง Form เบิกของ",
-                type="primary",
-                use_container_width=True,
-                disabled=export_disabled,
-            ):
-                try:
-                    doc_number  = doc_number_input.strip() or get_next_doc_number()
-                    excel_bytes = export_to_form(
-                        qty_data, doc_number, requester_name, employee_id,
-                        costcode=costcode_val, location=location_val,
-                    )
-                    st.session_state.dl_bytes        = excel_bytes
-                    st.session_state.dl_fname        = f"{doc_number}.xlsx"
-                    st.session_state.dl_msg          = f"✅ {doc_number} — {requester_name} ({len(qty_data)} รายการ)"
-                    st.session_state.pending_history = {
-                        "qty_data":       qty_data,
-                        "doc_number":     doc_number,
-                        "requester_name": requester_name,
-                        "employee_id":    employee_id,
-                    }
-                except Exception as e:
-                    st.error(f"เกิดข้อผิดพลาด: {e}")
-
-        with col_dl:
-            dl_ready = st.session_state.dl_bytes is not None
-            if dl_ready:
-                _save_pending_history()
-                download_button_mobile(
-                    data     = st.session_state.dl_bytes,
-                    filename = st.session_state.dl_fname,
-                    label    = f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
+        if st.button(
+            "📥 สร้าง Form เบิกของ",
+            type="primary",
+            use_container_width=True,
+            disabled=export_disabled,
+        ):
+            try:
+                doc_number  = doc_number_input.strip() or get_next_doc_number()
+                excel_bytes = export_to_form(
+                    qty_data, doc_number, requester_name, employee_id,
+                    costcode=costcode_val, location=location_val,
                 )
-            else:
-                st.button("⬇️ ดาวน์โหลด (กดสร้างก่อน)", use_container_width=True, disabled=True)
+                st.session_state.dl_bytes        = excel_bytes
+                st.session_state.dl_fname        = f"{doc_number}.xlsx"
+                st.session_state.dl_msg          = f"✅ {doc_number} — {requester_name} ({len(qty_data)} รายการ)"
+                st.session_state.pending_history = {
+                    "qty_data":       qty_data,
+                    "doc_number":     doc_number,
+                    "requester_name": requester_name,
+                    "employee_id":    employee_id,
+                }
+                st.rerun()
+            except Exception as e:
+                st.error(f"เกิดข้อผิดพลาด: {e}")
 
-        if st.session_state.dl_msg:
-            st.success(st.session_state.dl_msg)
+        if st.session_state.dl_bytes is None:
+            st.info("💡 กด 'สร้าง Form เบิกของ' แล้วปุ่มดาวน์โหลดจะปรากฏด้านบน")
 
 
 # ══════════════════════════════════════════
@@ -577,13 +534,12 @@ with tab3:
         st.info("ยังไม่มีประวัติการเบิก")
     else:
         st.dataframe(hist.reset_index(drop=True), use_container_width=True, hide_index=True)
-        col_cap, col_dl = st.columns([4, 2])
-        with col_cap:
-            st.caption(f"ประวัติทั้งหมด: {len(hist):,} รายการ  |  กด 🔄 เพื่อดูข้อมูลล่าสุด")
-        with col_dl:
-            fname_hist = f"history_{datetime.now().strftime('%Y%m%d')}.xlsx"
-            download_button_mobile(
-                data     = history_to_excel_bytes(),
-                filename = fname_hist,
-                label    = "⬇️ ดาวน์โหลดประวัติ (.xlsx)",
-            )
+        st.caption(f"ประวัติทั้งหมด: {len(hist):,} รายการ  |  กด 🔄 เพื่อดูข้อมูลล่าสุด")
+        fname_hist = f"history_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        st.download_button(
+            label    = "⬇️ ดาวน์โหลดประวัติ (.xlsx)",
+            data     = history_to_excel_bytes(),
+            file_name= fname_hist,
+            mime     = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
