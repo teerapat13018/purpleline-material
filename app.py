@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import requests as _req
 from google.oauth2.service_account import Credentials
 from openpyxl import load_workbook
 import os
@@ -12,9 +13,7 @@ from datetime import datetime
 # ──────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR  = os.path.join(BASE_DIR, "static", "exports")
-os.makedirs(STATIC_DIR, exist_ok=True)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FORM_TEMPLATE_PATH = os.path.join(BASE_DIR, "Form เบิกของ TAM 19032026.xlsx")
 SIGNATURE_PATH     = os.path.join(BASE_DIR, "signature.png")
@@ -45,12 +44,20 @@ def get_gsheet():
     return gc.open_by_key(SHEET_ID)
 
 
-def save_for_download(data: bytes, filename: str) -> str:
-    """บันทึกไฟล์ลง static/exports/ แล้วคืน relative URL"""
-    filepath = os.path.join(STATIC_DIR, filename)
-    with open(filepath, "wb") as f:
-        f.write(data)
-    return f"app/static/exports/{filename}"
+def upload_to_fileio(data: bytes, filename: str) -> str:
+    """อัปโหลดไฟล์ไปยัง file.io — ได้ external link ที่ mobile browser ทุกตัวเปิดได้"""
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    resp = _req.post(
+        "https://file.io/",
+        files={"file": (filename, io.BytesIO(data), mime)},
+        data={"expires": "1d"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    j = resp.json()
+    if j.get("success"):
+        return j["link"]
+    raise RuntimeError(f"file.io error: {j}")
 
 
 # ──────────────────────────────────────────
@@ -284,35 +291,35 @@ with st.sidebar:
 if st.session_state.dl_bytes is not None:
     _save_pending_history()
 
-    # บันทึก static file ครั้งแรกเท่านั้น
+    # อัปโหลด file.io ครั้งแรกเท่านั้น
     if st.session_state.dl_drive_url is None:
-        url = save_for_download(st.session_state.dl_bytes, st.session_state.dl_fname)
-        st.session_state.dl_drive_url = url
+        with st.spinner("⏳ กำลังเตรียมไฟล์..."):
+            try:
+                url = upload_to_fileio(st.session_state.dl_bytes, st.session_state.dl_fname)
+                st.session_state.dl_drive_url = url
+                st.rerun()
+            except Exception as e:
+                st.error(f"เตรียมไฟล์ไม่สำเร็จ: {e}")
 
-    dl_col, close_col = st.columns([5, 1])
-    fname = st.session_state.dl_fname
-    furl  = st.session_state.dl_drive_url
-    with dl_col:
-        st.markdown(
-            f'''<a href="{furl}" download="{fname}"
-                style="display:block;width:100%;text-align:center;
-                       background:#0068c9;color:white;padding:12px 16px;
-                       border-radius:8px;text-decoration:none;font-size:16px;
-                       font-weight:600;box-sizing:border-box;">
-                ⬇️ ดาวน์โหลด {fname}
-            </a>''',
-            unsafe_allow_html=True,
-        )
-    with close_col:
-        if st.button("✖", use_container_width=True, help="ปิด"):
-            st.session_state.dl_bytes     = None
-            st.session_state.dl_fname     = None
-            st.session_state.dl_msg       = None
-            st.session_state.dl_drive_url = None
-            st.rerun()
-    if st.session_state.dl_msg:
-        st.caption(st.session_state.dl_msg)
-    st.divider()
+    if st.session_state.dl_drive_url:
+        dl_col, close_col = st.columns([5, 1])
+        with dl_col:
+            st.link_button(
+                label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
+                url=st.session_state.dl_drive_url,
+                use_container_width=True,
+                type="primary",
+            )
+        with close_col:
+            if st.button("✖", use_container_width=True, help="ปิด"):
+                st.session_state.dl_bytes     = None
+                st.session_state.dl_fname     = None
+                st.session_state.dl_msg       = None
+                st.session_state.dl_drive_url = None
+                st.rerun()
+        if st.session_state.dl_msg:
+            st.caption(st.session_state.dl_msg)
+        st.divider()
 
 # ── 3 TABS ──
 n_selected = len(st.session_state.selected_keys)
