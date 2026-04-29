@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 import requests as _req
+import subprocess
 from google.oauth2.service_account import Credentials
 from openpyxl import load_workbook
 import os
@@ -45,49 +46,80 @@ def get_gsheet():
 
 
 def upload_temp(data: bytes, filename: str) -> str:
-    """ลองอัปโหลดทีละ service จนสำเร็จ"""
-    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    errors = []
+    """ลองอัปโหลดทีละ service — คืน (url, debug_log)"""
+    mime = "application/pdf" if filename.endswith(".pdf") else \
+           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    log = []
 
     # 1) tmpfiles.org
     try:
         r = _req.post("https://tmpfiles.org/api/v1/upload",
-                      files={"file": (filename, io.BytesIO(data), mime)},
+                      files={"file": (filename, data, mime)},
                       timeout=20)
-        r.raise_for_status()
-        j = r.json()
-        if j.get("status") == "success":
-            return j["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
-        errors.append(f"tmpfiles={j}")
+        log.append(f"tmpfiles → HTTP {r.status_code} | {r.text[:120]}")
+        if r.status_code == 200:
+            j = r.json()
+            if j.get("status") == "success":
+                return j["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/"), "\n".join(log)
     except Exception as e:
-        errors.append(f"tmpfiles={e}")
+        log.append(f"tmpfiles → exception: {e}")
 
     # 2) 0x0.st
     try:
         r = _req.post("https://0x0.st/",
-                      files={"file": (filename, io.BytesIO(data), mime)},
+                      files={"file": (filename, data, mime)},
                       timeout=20)
+        log.append(f"0x0 → HTTP {r.status_code} | {r.text[:120]}")
         if r.ok and r.text.strip().startswith("http"):
-            return r.text.strip()
-        errors.append(f"0x0=status{r.status_code}:{r.text[:80]}")
+            return r.text.strip(), "\n".join(log)
     except Exception as e:
-        errors.append(f"0x0={e}")
+        log.append(f"0x0 → exception: {e}")
 
     # 3) litterbox.catbox.moe
     try:
         r = _req.post(
             "https://litterbox.catbox.moe/resources/internals/api.php",
             data={"reqtype": "fileupload", "time": "1h"},
-            files={"fileToUpload": (filename, io.BytesIO(data), mime)},
+            files={"fileToUpload": (filename, data, mime)},
             timeout=30,
         )
+        log.append(f"litterbox → HTTP {r.status_code} | {r.text[:120]}")
         if r.ok and r.text.strip().startswith("http"):
-            return r.text.strip()
-        errors.append(f"litterbox=status{r.status_code}:{r.text[:80]}")
+            return r.text.strip(), "\n".join(log)
     except Exception as e:
-        errors.append(f"litterbox={e}")
+        log.append(f"litterbox → exception: {e}")
 
-    raise RuntimeError(" | ".join(errors))
+    # 4) bashupload.com
+    try:
+        r = _req.post("https://bashupload.com/",
+                      files={"file": (filename, data, mime)},
+                      timeout=20)
+        log.append(f"bashupload → HTTP {r.status_code} | {r.text[:120]}")
+        for line in r.text.splitlines():
+            if line.strip().startswith("http"):
+                return line.strip(), "\n".join(log)
+    except Exception as e:
+        log.append(f"bashupload → exception: {e}")
+
+    return None, "\n".join(log)
+
+
+def xlsx_to_pdf(xlsx_bytes: bytes) -> bytes:
+    """แปลง xlsx → PDF ด้วย LibreOffice (headless)"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        in_path  = os.path.join(tmpdir, "form.xlsx")
+        pdf_path = os.path.join(tmpdir, "form.pdf")
+        with open(in_path, "wb") as f:
+            f.write(xlsx_bytes)
+        result = subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "pdf",
+             "--outdir", tmpdir, in_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        if not os.path.exists(pdf_path):
+            raise RuntimeError(f"LibreOffice error: {result.stderr[:200]}")
+        with open(pdf_path, "rb") as f:
+            return f.read()
 
 
 # ──────────────────────────────────────────
@@ -325,12 +357,9 @@ if st.session_state.dl_bytes is not None:
     # อัปโหลดครั้งแรกเท่านั้น (dl_drive_url == "" หมายความว่าลองแล้วล้มเหลวทุก service)
     if st.session_state.dl_drive_url is None:
         with st.spinner("⏳ กำลังเตรียมไฟล์..."):
-            try:
-                url = upload_temp(st.session_state.dl_bytes, st.session_state.dl_fname)
-                st.session_state.dl_drive_url = url
-            except Exception as e:
-                st.session_state.dl_drive_url = ""   # mark ว่าล้มเหลว
-                st.session_state.dl_upload_err = str(e)
+            url, debug_log = upload_temp(st.session_state.dl_bytes, st.session_state.dl_fname)
+            st.session_state.dl_drive_url  = url or ""
+            st.session_state.dl_upload_err = debug_log
         st.rerun()
 
     dl_col, close_col = st.columns([5, 1])
@@ -345,12 +374,16 @@ if st.session_state.dl_bytes is not None:
             )
         else:
             # fallback — ใช้ st.download_button
-            st.warning(f"⚠️ upload ไม่สำเร็จ ({st.session_state.get('dl_upload_err','')[:120]}) — ลองกดปุ่มนี้แทน:")
+            with st.expander("⚠️ อัปโหลดไม่สำเร็จ — ดู log"):
+                st.code(st.session_state.get("dl_upload_err", "ไม่มี log"))
+            st.write("ลองกดปุ่มนี้แทน:")
+            dl_mime = "application/pdf" if st.session_state.dl_fname.endswith(".pdf") \
+                      else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             st.download_button(
                 label=f"⬇️ ดาวน์โหลด {st.session_state.dl_fname}",
                 data=st.session_state.dl_bytes,
                 file_name=st.session_state.dl_fname,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime=dl_mime,
                 use_container_width=True,
                 type="primary",
             )
@@ -557,8 +590,16 @@ with tab2:
                     qty_data, doc_number, requester_name, employee_id,
                     costcode=costcode_val, location=location_val,
                 )
-                st.session_state.dl_bytes        = excel_bytes
-                st.session_state.dl_fname        = f"{doc_number}.xlsx"
+                with st.spinner("⏳ กำลังแปลงเป็น PDF..."):
+                    try:
+                        dl_bytes = xlsx_to_pdf(excel_bytes)
+                        dl_fname = f"{doc_number}.pdf"
+                    except Exception:
+                        # fallback เป็น xlsx ถ้า LibreOffice ไม่พร้อม
+                        dl_bytes = excel_bytes
+                        dl_fname = f"{doc_number}.xlsx"
+                st.session_state.dl_bytes        = dl_bytes
+                st.session_state.dl_fname        = dl_fname
                 st.session_state.dl_msg          = f"✅ {doc_number} — {requester_name} ({len(qty_data)} รายการ)"
                 st.session_state.dl_drive_url    = None  # reset เพื่ออัปโหลดใหม่
                 st.session_state.pending_history = {
